@@ -1,0 +1,2 @@
+[console_scripts]
+foldflow = foldflow.cli:main

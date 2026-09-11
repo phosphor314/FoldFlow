@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: foldflow
+Version: 0.1.0
+Summary: A DAG-based project workflow engine
+Author: phosphor314
+Requires-Python: >=3.8
+Requires-Dist: argparse
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

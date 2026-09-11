@@ -151,22 +151,54 @@ class TestSprint(unittest.TestCase):
                 gen_node = PromptNode(name="generate", prompt_template="Generate")
                 build_node = ExecuteNode(name="build", command="echo Build")
                 
+                # Store node IDs before adding to fold
+                gen_id = gen_node.id
+                build_id = build_node.id
+                
                 # Add resource
                 output_resource = TextResource(name="output", content="Generated code")
                 gen_node.add_emitted_resource("output", output_resource)
                 build_node.add_consumed_resource("output", output_resource)
                 
-                build_node.add_dependency(gen_node.id)
+                build_node.add_dependency(gen_id)
                 
                 fold = project.get_fold()
                 fold.add_node(gen_node)
                 fold.add_node(build_node)
+                
+                # Save fold before resolution
+                project.save_fold()
                 
                 # Resolve sprint
                 result = await resolve_sprint(project)
                 
                 self.assertTrue(result["success"])
                 self.assertEqual(len(result["resolved_nodes"]), 2)
+                
+                # Verify resources came out intact
+                # Reload from saved file
+                project.load_fold()
+                loaded_fold = project.get_fold()
+                
+                loaded_gen = loaded_fold.get_node(gen_id)
+                loaded_build = loaded_fold.get_node(build_id)
+                
+                # Check that nodes were loaded
+                self.assertIsNotNone(loaded_gen)
+                self.assertIsNotNone(loaded_build)
+                
+                # Check that resources are preserved in both nodes
+                self.assertIn("output", loaded_gen.emitted_resources)
+                self.assertIn("output", loaded_build.consumed_resources)
+                
+                # Verify the resource content is intact
+                gen_output = loaded_gen.emitted_resources["output"]
+                build_output = loaded_build.consumed_resources["output"]
+                
+                self.assertEqual(gen_output.name, "output")
+                self.assertEqual(gen_output.content, "Generated code")
+                self.assertEqual(build_output.name, "output")
+                self.assertEqual(build_output.content, "Generated code")
         
         asyncio.run(test())
 
