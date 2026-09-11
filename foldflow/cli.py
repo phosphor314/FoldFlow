@@ -72,8 +72,12 @@ def create_parser() -> argparse.ArgumentParser:
     )
     add_node_parser.add_argument(
         "--model",
-        default="default",
-        help="LLM model to use (for prompt nodes)",
+        default="dummy",
+        help="LLM model to use (for prompt nodes, 'dummy' for testing)",
+    )
+    add_node_parser.add_argument(
+        "--api-key",
+        help="Mistral API key (optional, can also use MISTRAL_API_KEY env var)",
     )
     add_node_parser.add_argument(
         "--dependency",
@@ -221,6 +225,7 @@ def add_node(
     command: Optional[str],
     prompt: Optional[str],
     model: str,
+    api_key: Optional[str],
     dependencies: Optional[list],
     repo_path: str,
     fold_file: str,
@@ -241,6 +246,7 @@ def add_node(
             name=name,
             prompt_template=prompt or "",
             model=model,
+            api_key=api_key,
         )
     
     if node_id:
@@ -402,6 +408,7 @@ def main() -> None:
                 command=args.command,
                 prompt=args.prompt,
                 model=args.model,
+                api_key=args.api_key,
                 dependencies=args.dependency,
                 repo_path=args.repo_path,
                 fold_file=args.fold_file,

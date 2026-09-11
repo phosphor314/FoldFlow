@@ -193,9 +193,10 @@ class Node(ABC):
 class PromptNode(Node):
     """A node that prompts an LLM."""
     prompt_template: str = ""
-    model: str = "default"
+    model: str = "dummy"  # Default to dummy model for testing
     temperature: float = 0.7
     max_tokens: int = 2048
+    api_key: Optional[str] = None  # Optional API key, can be set via environment variable
     
     def get_type(self) -> NodeType:
         return NodeType.PROMPT
@@ -219,12 +220,54 @@ class PromptNode(Node):
             
             prompt = "\n".join(prompt_parts)
             
-            # TODO: Replace with actual LLM call
-            # For now, simulate a successful response
-            self.output = f"LLM response to prompt: {prompt[:100]}..."
-            self.resolved = True
-            self.error = None
-            return True
+            # Use dummy model for testing
+            if self.model == "dummy":
+                self.output = f"LLM response to prompt: {prompt[:100]}..."
+                self.resolved = True
+                self.error = None
+                return True
+            
+            # Use actual Mistral API for non-dummy models
+            try:
+                from mistralai.client import Mistral
+                import os
+                
+                api_key = self.api_key or os.environ.get("MISTRAL_API_KEY")
+                if not api_key:
+                    self.error = "Mistral API key not provided"
+                    self.resolved = False
+                    return False
+                
+                client = Mistral(api_key=api_key)
+                
+                # Convert prompt to messages format
+                messages = [{"role": "user", "content": prompt}]
+                
+                response = client.chat.complete(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
+                
+                # Extract response text
+                if response.choices and len(response.choices) > 0:
+                    self.output = response.choices[0].message.content
+                else:
+                    self.output = "No response from LLM"
+                
+                self.resolved = True
+                self.error = None
+                return True
+                
+            except ImportError:
+                self.error = "mistralai package not installed"
+                self.resolved = False
+                return False
+            except Exception as e:
+                self.error = f"Mistral API error: {str(e)}"
+                self.resolved = False
+                return False
             
         except Exception as e:
             self.error = str(e)
@@ -238,6 +281,7 @@ class PromptNode(Node):
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "api_key": self.api_key,
         })
         return result
     
@@ -247,9 +291,10 @@ class PromptNode(Node):
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", ""),
             prompt_template=data.get("prompt_template", ""),
-            model=data.get("model", "default"),
+            model=data.get("model", "dummy"),
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 2048),
+            api_key=data.get("api_key"),
             resolved=data.get("resolved", False),
             output=data.get("output"),
             error=data.get("error"),
