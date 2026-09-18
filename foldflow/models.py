@@ -1,11 +1,15 @@
 """Core data models for FoldFlow."""
 
+from collections.abc import Callable
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Set, Any, Tuple
 import json
+
+from mistralai.client.models import ChatCompletionChoice, Tool, ToolMessage, UserMessage, tool
+from mistralai.client.models.chatcompletionrequest import ChatCompletionRequestMessage, ChatCompletionRequestTool
 
 
 class ResourceType(Enum):
@@ -67,7 +71,7 @@ class TextResource(Resource):
 class SkillResource(Resource):
     """A skill resource (tools + SKILL.md)."""
     skill_md_content: str = ""
-    tool_names: List[str] = field(default_factory=list)
+    tools: list[Tuple[Tool, Callable]] = field(default_factory=list)
     
     def get_type(self) -> ResourceType:
         return ResourceType.SKILL
@@ -78,16 +82,16 @@ class SkillResource(Resource):
             "id": self.id,
             "name": self.name,
             "skill_md_content": self.skill_md_content,
-            "tool_names": self.tool_names,
+            "tools": self.tools,
         }
     
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SkillResource":
+    def from_dict(cls, data: Dict[str, Any]) -> SkillResource:
         return cls(
             id=data.get("id", str(uuid.uuid4())),
             name=data.get("name", ""),
             skill_md_content=data.get("skill_md_content", ""),
-            tool_names=data.get("tool_names", []),
+            tools=data.get("tool_names", []),
         )
 
 
@@ -196,13 +200,15 @@ class PromptNode(Node):
     model: str = "dummy"  # Default to dummy model for testing
     temperature: float = 0.7
     max_tokens: int = 2048
-    api_key: Optional[str] = None  # Optional API key, can be set via environment variable
     
     def get_type(self) -> NodeType:
         return NodeType.PROMPT
     
     async def resolve(self, project_root: str) -> bool:
         """Resolve by building prompt and calling LLM."""
+        self.output = ""
+        self.error = ""
+        
         try:
             # Build prompt from consumed resources
             prompt_parts = []
@@ -220,6 +226,29 @@ class PromptNode(Node):
             
             prompt = "\n".join(prompt_parts)
             
+            # get tools provided by skills
+            requestTools = []
+            functionDict = {}
+            for name, resource in self.consumed_resources.items():
+                if not isinstance(resource, SkillResource):
+                    continue
+                for t in resource.tools:
+                    requestTools.append(t[0])
+                    if t[0].function.name in functionDict:
+                        self.resolved = False
+                        self.output = None
+                        conflict_resource = None
+                        for _name, _resource in self.consumed_resources.items():
+                            if not isinstance(_resource, SkillResource):
+                                continue
+                            for _t in _resource.tools:
+                                if t[0].function.name in functionDict:
+                                    conflict_resource = _name
+                        assert(conflict_resource)
+                        self.error = "Tools from skill resource " + name + " and " + conflict_resource + " share a name. Tool names must be unique!"
+                        return False
+                    functionDict[t[0].function.name] = t[1]
+            
             # Use dummy model for testing
             if self.model == "dummy":
                 self.output = f"LLM response to prompt: {prompt[:100]}..."
@@ -232,7 +261,7 @@ class PromptNode(Node):
                 from mistralai.client import Mistral
                 import os
                 
-                api_key = self.api_key or os.environ.get("MISTRAL_API_KEY")
+                api_key = os.environ.get("MISTRAL_API_KEY")
                 if not api_key:
                     self.error = "Mistral API key not provided"
                     self.resolved = False
@@ -241,21 +270,47 @@ class PromptNode(Node):
                 client = Mistral(api_key=api_key)
                 
                 # Convert prompt to messages format
-                messages = [{"role": "user", "content": prompt}]
+                messages: list[ChatCompletionRequestMessage] = [UserMessage(content=prompt)]
                 
-                response = client.chat.complete(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                )
+                tokens_left = self.max_tokens + 1
                 
-                # Extract response text
-                if response.choices and len(response.choices) > 0:
-                    self.output = response.choices[0].message.content
-                else:
+                while (tokens_left > 0):
+                    response = client.chat.complete(
+                        model=self.model,
+                        messages=messages,
+                        tools=requestTools,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                    )
+                    assert(response.usage.prompt_tokens)
+                    tokens_left -= response.usage.prompt_tokens
+                    
+                    for c in response.choices:
+                        if not c.message:
+                            continue
+                        if c.message.tool_calls:
+                            for t in c.message.tool_calls:
+                                try:
+                                    if isinstance(t.function.arguments, str):
+                                        tool_resp = functionDict[t.function.name][1](**json.loads(t.function.arguments))
+                                    else:
+                                        tool_resp = functionDict[t.function.name][1](**t.function.arguments)
+                                    if not tool_resp:
+                                        tool_resp = "success"
+                                    messages.append(ToolMessage(content=str(tool_resp), tool_call_id=t.id))
+                                except Exception as e:
+                                    messages.append(ToolMessage(content="Error while calling tool " + t.function.name + ": " + str(e), tool_call_id=t.id))
+                        elif c.message.content:
+                            assert(type(c.message.content) == str)
+                            self.output += c.message.content
+                
+                if self.output == "":
                     self.output = "No response from LLM"
-                
+                if tokens_left == 0:
+                    self.error = "Ran out of tokens!"
+                    self.resolved = False
+                    return False
+                    
                 self.resolved = True
                 self.error = None
                 return True
@@ -281,7 +336,6 @@ class PromptNode(Node):
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "api_key": self.api_key,
         })
         return result
     
@@ -294,7 +348,6 @@ class PromptNode(Node):
             model=data.get("model", "dummy"),
             temperature=data.get("temperature", 0.7),
             max_tokens=data.get("max_tokens", 2048),
-            api_key=data.get("api_key"),
             resolved=data.get("resolved", False),
             output=data.get("output"),
             error=data.get("error"),

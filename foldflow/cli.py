@@ -225,7 +225,6 @@ def add_node(
     command: Optional[str],
     prompt: Optional[str],
     model: str,
-    api_key: Optional[str],
     dependencies: Optional[list],
     repo_path: str,
     fold_file: str,
@@ -246,7 +245,6 @@ def add_node(
             name=name,
             prompt_template=prompt or "",
             model=model,
-            api_key=api_key,
         )
     
     if node_id:
@@ -408,7 +406,6 @@ def main() -> None:
                 command=args.command,
                 prompt=args.prompt,
                 model=args.model,
-                api_key=args.api_key,
                 dependencies=args.dependency,
                 repo_path=args.repo_path,
                 fold_file=args.fold_file,
